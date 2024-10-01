@@ -1,0 +1,13 @@
+{
+
+    "video": {
+        "frame_skip": 3
+    },
+
+    "queues": {
+        "input_queue_size": 30,
+        "output_queue_size": 30
+    }
+
+
+}

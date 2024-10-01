@@ -1,0 +1,28 @@
+services:
+  plate_recognition:
+    image: plate_recognition
+    container_name: plate_recognition
+    environment:
+      - VIDEO_PATH=video_short.mp4
+      #Хост и порт для подключения к базе данных
+      - HOST=clickhouse-server
+      - PORT=9000
+      #Хост и порт для GRPC
+      - GRPC_HOST=localhost
+      - GRPC_PORT=1539
+    ports:
+      - "6000:1539"
+
+  clickhouse-server:
+    image: bitnami/clickhouse:latest
+    container_name: clickhouse-server
+    environment:
+      - CLICKHOUSE_ADMIN_PASSWORD=password
+    ports:
+      - "7500:8123"
+      - "8500:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+
+volumes:
+  clickhouse_data:
