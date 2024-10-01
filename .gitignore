@@ -1,0 +1,14 @@
+*.tmp
+__init__.py
+vehicle_data.proto
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+env/
+venv/
+*.log
+1
+*.idea
+video_short.mp4
+vehicle_data.proto
