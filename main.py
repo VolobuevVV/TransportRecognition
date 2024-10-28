@@ -7,7 +7,6 @@ from proc.recognizer_runner import RecognizerRunner
 from multiprocessing import Process
 from ultralytics import YOLO
 from collections import defaultdict
-from datetime import datetime
 from server import serve
 import os
 from clickhouse_driver import Client
@@ -18,7 +17,7 @@ detector_runner = DetectorRunner(
             )
 
 recognizer_runner = RecognizerRunner(
-                "./data/plate_rec.tflite",  128, 64, 2
+                "./data/plate_rec.tflite",  128, 64, 5
             )
 
 def get_client():
@@ -27,7 +26,7 @@ def get_client():
     return Client(host=host, port=port, user='default', password='password', database='default')
 
 
-model = YOLO("yolov8n.pt")
+model = YOLO("data/yolo11n_5classes.pt")
 track_history = {
     "car": defaultdict(lambda: []),
     "bus": defaultdict(lambda: []),
@@ -47,20 +46,18 @@ def detection(input_queue: multiprocessing.Queue, output_queue:  multiprocessing
                     pass
             output_queue.put((bboxes, image))
             last_item_time = time.time()
-        if time.time() - last_item_time > 60:
+        if time.time() - last_item_time > 7200:
             print("Нет новых данных во входной очереди, ДЕТЕКЦИЯ ЗАКОНЧЕНА")
             break
 def recognition(output_queue:  multiprocessing.Queue):
     print("Началась классификация")
     last_item_time = time.time()
-    global list_of_plates
-    list_of_plates = []
     while True:
         if output_queue.qsize() > 0:
             bboxes, frame = output_queue.get()
             recognizer_runner.run(frame, bboxes)
             last_item_time = time.time()
-        if time.time() - last_item_time > 60:
+        if time.time() - last_item_time > 7200:
             print("Нет новых данных в выходной очереди, РАСПОЗНАВАНИЕ ЗАКОНЧЕНО")
             break
 
@@ -72,63 +69,53 @@ def create_video_stream(input_queue: multiprocessing.Queue, video_path: str,):
   if not cap.isOpened():
     raise IOError("Не удалось открыть видеофайл: {}".format(video_path))
   print("Началось чтение видеопотока")
+
   with open('config.json') as config_file:
       config = json.load(config_file)
   frame_skip = config['video']['frame_skip']
-  start_time = time.perf_counter()
   frame_counter = 0
+  client = get_client()
   while True:
-    ret, frame = cap.read()
+      ret, frame = cap.read()
+      if not ret:
+          break
 
-    if not ret:
-      break
-    frame_counter += 1
+      frame_counter += 1
+      if frame_counter % frame_skip != 0:
+          continue
 
-    if frame_counter % frame_skip != 0:
-        continue
-    results = model.track(frame, persist=True, verbose=False)
-    detection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    boxes = results[0].boxes.xywh.cpu()
-    track_ids = results[0].boxes.id.int().cpu().tolist()
-    class_names = results[0].boxes.cls.int().cpu().tolist()
-    if (class_names):
-        for box, track_id, class_name in zip(boxes, track_ids, class_names):
-            x, y, w, h = box
-            class_name = model.names[class_name]
-            if (class_name in transport):
-                track = track_history[class_name][track_id]
-                track.append((float(x), float(y)))
-                if len(track) > 30:
-                    track.pop(0)
-    client = get_client()
+      results = model.track(frame, persist=True, verbose=False, agnostic_nms=True, tracker="bytetrack_v2.yaml", stream=True)
+      detection_time = int(time.time())
+      for res in results:
+          if res.boxes.id is not None:
+              boxes = res.boxes.xywh.cpu()
+              track_ids = res.boxes.id.int().cpu().tolist()
+              class_names = res.boxes.cls.int().cpu().tolist()
 
-    client.execute('''
-        INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES
-    ''', [(len(track_history["car"]), len(track_history["bus"]), len(track_history["truck"]),
-           len(track_history["motorcycle"]), len(track_history["bicycle"]), detection_time)])
+              for box, track_id, class_name in zip(boxes, track_ids, class_names):
+                  x, y, w, h = box
+                  class_name = model.names[class_name]
+                  track = track_history[class_name][track_id]
+                  if len(track) < 1:
+                      track.append((float(x), float(y)))
 
-    client.disconnect()
-    if input_queue.full():
-        while input_queue.full():
-            pass
-    input_queue.put(frame)
-    print("Суммарное количество кадров: ", frame_counter)
+              client.execute(
+                  ''' INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES ''',
+                  [(len(track_history["car"]), len(track_history["bus"]), len(track_history["truck"]),
+                    len(track_history["motorcycle"]), len(track_history["bicycle"]), detection_time)])
+
+      while input_queue.full():
+          pass
+      input_queue.put(frame)
+      print("Суммарное количество кадров: ", frame_counter)
+
   cap.release()
-  end_time = time.perf_counter()
-  execution_time = end_time - start_time
-  print(f"Время выполнения: {execution_time:.6f} секунд")
-  print("Видеопоток закрыт")
-  car_count = len(track_history["car"])
-  bus_count = len(track_history["bus"])
-  truck_count = len(track_history["truck"])
-  motorcycle_count = len(track_history["motorcycle"])
-  bicycle_count = len(track_history["bicycle"])
 
-  print(f"Количество автомобилей: {car_count}")
-  print(f"Количество автобусов: {bus_count}")
-  print(f"Количество грузовиков: {truck_count}")
-  print(f"Количество мотоциклов: {motorcycle_count}")
-  print(f"Количество велосипедов: {bicycle_count}")
+  client.disconnect()
+  print("Видеопоток закрыт")
+
+  for vehicle in ["car", "bus", "truck", "motorcycle", "bicycle"]:
+      print(f"Количество {vehicle} : {len(track_history[vehicle])}")
 
 
 
@@ -138,11 +125,12 @@ if __name__ == "__main__":
         config = json.load(config_file)
     client = get_client()
 
+
     client.execute('''
     CREATE TABLE IF NOT EXISTS plates (
         plate String,
         crop_plate Blob,
-        detection_time String,
+        detection_time Int32,
     ) ENGINE = MergeTree()
     ORDER BY detection_time
     ''')
@@ -150,17 +138,16 @@ if __name__ == "__main__":
     client.execute('''
     CREATE TABLE IF NOT EXISTS transport (
         car Int32,
-        bus Int32, 
+        bus Int32,
         truck Int32,
         motorcycle Int32,
         bicycle Int32,
-        detection_time String
+        detection_time Int32
     ) ENGINE = MergeTree()
     ORDER BY detection_time
     ''')
 
     client.disconnect()
-
 
     input_queue = multiprocessing.Queue(maxsize=config['queues']['input_queue_size'])
     det_output_queue = multiprocessing.Queue(maxsize=config['queues']['output_queue_size'])

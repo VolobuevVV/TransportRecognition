@@ -14,8 +14,8 @@ class RecognizerRunner:
     def run(self, frame, bboxes):
         recognizer = self.recognizer
         plates = helper.bbox_crop_plate(bboxes, frame)
-        send_plates = recognizer.run(plates)
-        return send_plates
+        recognizer.run(plates)
+
 
 
 

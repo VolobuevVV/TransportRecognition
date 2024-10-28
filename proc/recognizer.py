@@ -1,6 +1,8 @@
 import json
 import os
 import sqlite3
+import time
+
 import cv2
 import numpy as np
 import utils.helper as helper
@@ -71,6 +73,7 @@ class PlateRecognizer():
         return Client(host=host, port=port, user='default', password='password', database='default')
 
     def run(self, plates):
+        detection_time = int(time.time())
         plate_found = False
         for in_plate in plates:
             plate = self._preprocess(in_plate)
@@ -89,7 +92,6 @@ class PlateRecognizer():
                         self.decision_dict[pl][2]
                     ]
                 else:
-                    detection_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     self.decision_dict[pl] = [1, in_plate_res, detection_time]
 
                 if len(self.decision_dict[pl]) > 0:
@@ -101,9 +103,12 @@ class PlateRecognizer():
                     _, buffer = cv2.imencode('.png', crop_plate)
                     crop_plate_blob = buffer.tobytes()
                     client = self.get_client()
+
                     client.execute('''
                         INSERT INTO plates (plate, crop_plate, detection_time) VALUES
                     ''', [(plate, crop_plate_blob, detection_time)])
+
+
                     client.disconnect()
 
             self.frames_number = 0

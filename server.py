@@ -2,12 +2,10 @@ import os
 import grpc
 from concurrent import futures
 import time
-
 from clickhouse_driver import Client
-
 import vehicle_data_pb2
 import vehicle_data_pb2_grpc
-import json
+
 
 
 def get_client():
@@ -24,8 +22,10 @@ class ServiceTransport(vehicle_data_pb2_grpc.ServiceTransportServicer):
         min_time_result = client.execute(min_time_query)
 
         min_time = min_time_result[0][0]
+        start_time = request.start_time
+        end_time = request.end_time
 
-        if request.start_time < min_time:
+        if start_time < min_time:
             query = f"""
                 SELECT
                 MAX(car) - 0 AS car_diff,
@@ -34,7 +34,7 @@ class ServiceTransport(vehicle_data_pb2_grpc.ServiceTransportServicer):
                 MAX(motorcycle) - 0 AS motorcycle_diff,
                 MAX(bicycle) - 0 AS bicycle_diff
                 FROM transport 
-                WHERE detection_time BETWEEN '{request.start_time}' AND '{request.end_time}'
+                WHERE detection_time BETWEEN '{start_time}' AND '{end_time}'
             """
         else:
             query = f"""
@@ -45,7 +45,7 @@ class ServiceTransport(vehicle_data_pb2_grpc.ServiceTransportServicer):
                 MAX(motorcycle) - MIN(motorcycle) AS motorcycle_diff,
                 MAX(bicycle) - MIN(bicycle) AS bicycle_diff
                 FROM transport 
-                WHERE detection_time BETWEEN '{request.start_time}' AND '{request.end_time}'
+                WHERE detection_time BETWEEN '{start_time}' AND '{end_time}'
             """
 
 
@@ -74,15 +74,16 @@ class ServiceTransport(vehicle_data_pb2_grpc.ServiceTransportServicer):
 class ServicePlates(vehicle_data_pb2_grpc.ServicePlatesServicer):
     def GetPlatesData(self, request, context):
         client = get_client()
-
+        start_time = request.start_time
+        end_time = request.end_time
         query = f"""
             SELECT plate, detection_time 
             FROM (
                 SELECT plate, MAX(detection_time) AS detection_time 
-                FROM plates 
+                FROM plates
                 GROUP BY plate
             ) AS max_detection_times
-            WHERE detection_time BETWEEN '{request.start_time}' AND '{request.end_time}' 
+            WHERE detection_time BETWEEN '{start_time}' AND '{end_time}' 
             ORDER BY detection_time
         """
 
@@ -90,10 +91,9 @@ class ServicePlates(vehicle_data_pb2_grpc.ServicePlatesServicer):
         client.disconnect()
 
         if not plates:
-            plate_list = [vehicle_data_pb2.Plate(number="", time="")]
+            plate_list = [vehicle_data_pb2.Plate(number="", time=0)]
         else:
             plate_list = [vehicle_data_pb2.Plate(number=row[0], time=row[1]) for row in plates]
-
         return vehicle_data_pb2.PlatesData(plates=plate_list)
 
 def serve():
