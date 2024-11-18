@@ -1,4 +1,5 @@
 import json
+import math
 import multiprocessing
 import time
 from proc.detector_runner import DetectorRunner
@@ -6,19 +7,27 @@ import cv2
 from proc.recognizer_runner import RecognizerRunner
 from multiprocessing import Process
 from ultralytics import YOLO
-from collections import defaultdict
 from server import serve
 import os
 from clickhouse_driver import Client
-
+from ultralytics.solutions import ObjectCounter
+from ultralytics.solutions.solutions import BaseSolution
+from ultralytics import solutions
+import count_objects as co
+import utils.helper as helper
 
 detector_runner = DetectorRunner(
             "./data/yolo_plate_det.tflite",  224, 224, 7, 3, 0.2, 0.7
             )
 
 recognizer_runner = RecognizerRunner(
-                "./data/plate_rec.tflite",  128, 64, 5
+                "./data/plate_rec.tflite",  128, 64, 3
             )
+
+BaseSolution.extract_tracks = co.extract_tracks2
+BaseSolution.store_tracking_history = co.store_tracking_history2
+ObjectCounter.count = co.count2
+
 
 def get_client():
     host = os.getenv("HOST")
@@ -26,17 +35,8 @@ def get_client():
     return Client(host=host, port=port, user='default', password='password', database='default')
 
 
-model = YOLO("data/yolo11n_5classes.pt")
-track_history = {
-    "car": defaultdict(lambda: []),
-    "bus": defaultdict(lambda: []),
-    "truck": defaultdict(lambda: []),
-    "motorcycle": defaultdict(lambda: []),
-    "bicycle": defaultdict(lambda: []),
-}
-transport = ['car', 'bus', 'truck', 'motorcycle', 'bicycle']
 def detection(input_queue: multiprocessing.Queue, output_queue:  multiprocessing.Queue):
-    last_item_time = time.time()
+    print("Началась детекция")
     while True:
         if input_queue.qsize() > 0:
             frame = input_queue.get()
@@ -45,77 +45,87 @@ def detection(input_queue: multiprocessing.Queue, output_queue:  multiprocessing
                 while output_queue.full():
                     pass
             output_queue.put((bboxes, image))
-            last_item_time = time.time()
-        if time.time() - last_item_time > 7200:
-            print("Нет новых данных во входной очереди, ДЕТЕКЦИЯ ЗАКОНЧЕНА")
-            break
 def recognition(output_queue:  multiprocessing.Queue):
     print("Началась классификация")
-    last_item_time = time.time()
     while True:
         if output_queue.qsize() > 0:
             bboxes, frame = output_queue.get()
             recognizer_runner.run(frame, bboxes)
-            last_item_time = time.time()
-        if time.time() - last_item_time > 7200:
-            print("Нет новых данных в выходной очереди, РАСПОЗНАВАНИЕ ЗАКОНЧЕНО")
-            break
 
 
-def create_video_stream(input_queue: multiprocessing.Queue, video_path: str,):
+def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_model: str, region_of_counting: str, region_of_plates_detection: str, region_of_transport_detection: str):
 
   cap = cv2.VideoCapture(video_path)
-
+  w, h = (int(cap.get(x)) for x in (cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT))
   if not cap.isOpened():
     raise IOError("Не удалось открыть видеофайл: {}".format(video_path))
   print("Началось чтение видеопотока")
-
-  with open('config.json') as config_file:
-      config = json.load(config_file)
-  frame_skip = config['video']['frame_skip']
-  frame_counter = 0
   client = get_client()
+  counter = solutions.ObjectCounter(region=helper.str_to_coordinates_roc(region_of_counting, h, w), model=path_to_model)
+  transport_detection_coordinates = helper.str_to_coordinates_rotd(region_of_transport_detection, h, w)
+  plates_detection_coordinates = helper.str_to_coordinates_ropd(region_of_plates_detection, h, w)
+  frame_skip = 5
+  extra_frame_skip = 0
+  frame_counter = 0
+  start_time = start_time_second = extra_time = time.time()
+
+
   while True:
       ret, frame = cap.read()
       if not ret:
           break
+      if time.time() - extra_time > 0.5 and time.time() - extra_time < 3:
+          dop_time = time.time()
+          extra_frame_skip = math.ceil(cap.get(cv2.CAP_PROP_FPS) * (dop_time - start_time_second - (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000)))
+
+      intermediate_time = time.time()
+      elapsed_time = intermediate_time - start_time
 
       frame_counter += 1
-      if frame_counter % frame_skip != 0:
+
+      if elapsed_time >= 5:
+          current_fps = frame_counter / elapsed_time
+          print(f"FPS: {current_fps:.2f}  к/с")
+          frame_skip = math.ceil(frame_skip * cap.get(cv2.CAP_PROP_FPS) / current_fps)
+          print(f"frame skip: {frame_skip:.2f}  шт")
+          frame_counter = 0
+          start_time = intermediate_time
+
+      if frame_counter % (max(1, int((frame_skip + extra_frame_skip) / 3))) != 0:
+          if not input_queue.full():
+              new_frame = helper.select_area_for_detection(frame, plates_detection_coordinates)
+              input_queue.put(new_frame)
+
+      if frame_counter % (max(1, frame_skip + extra_frame_skip)) != 0:
           continue
 
-      results = model.track(frame, persist=True, verbose=False, agnostic_nms=True, tracker="bytetrack_v2.yaml", stream=True)
+      new_frame = helper.select_area_for_detection(frame, transport_detection_coordinates)
+      counter.count(new_frame)
       detection_time = int(time.time())
-      for res in results:
-          if res.boxes.id is not None:
-              boxes = res.boxes.xywh.cpu()
-              track_ids = res.boxes.id.int().cpu().tolist()
-              class_names = res.boxes.cls.int().cpu().tolist()
+      c = counter.classwise_counts
+      data = [
+          (
+              c.get('car', {}).get('IN', 0) + c.get('car', {}).get('OUT', 0),
+              c.get('bus', {}).get('IN', 0) + c.get('bus', {}).get('OUT', 0),
+              c.get('truck', {}).get('IN', 0) + c.get('truck', {}).get('OUT', 0),
+              c.get('motorcycle', {}).get('IN', 0) + c.get('motorcycle', {}).get('OUT', 0),
+              c.get('bicycle', {}).get('IN', 0) + c.get('bicycle', {}).get('OUT', 0),
+              detection_time
+          )
+      ]
 
-              for box, track_id, class_name in zip(boxes, track_ids, class_names):
-                  x, y, w, h = box
-                  class_name = model.names[class_name]
-                  track = track_history[class_name][track_id]
-                  if len(track) < 1:
-                      track.append((float(x), float(y)))
 
-              client.execute(
-                  ''' INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES ''',
-                  [(len(track_history["car"]), len(track_history["bus"]), len(track_history["truck"]),
-                    len(track_history["motorcycle"]), len(track_history["bicycle"]), detection_time)])
+      client.execute(
+          '''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''',
+          data
+      )
 
-      while input_queue.full():
-          pass
-      input_queue.put(frame)
-      print("Суммарное количество кадров: ", frame_counter)
 
   cap.release()
 
   client.disconnect()
   print("Видеопоток закрыт")
 
-  for vehicle in ["car", "bus", "truck", "motorcycle", "bicycle"]:
-      print(f"Количество {vehicle} : {len(track_history[vehicle])}")
 
 
 
@@ -125,11 +135,9 @@ if __name__ == "__main__":
         config = json.load(config_file)
     client = get_client()
 
-
     client.execute('''
     CREATE TABLE IF NOT EXISTS plates (
         plate String,
-        crop_plate Blob,
         detection_time Int32,
     ) ENGINE = MergeTree()
     ORDER BY detection_time
@@ -146,27 +154,62 @@ if __name__ == "__main__":
     ) ENGINE = MergeTree()
     ORDER BY detection_time
     ''')
-
     client.disconnect()
 
     input_queue = multiprocessing.Queue(maxsize=config['queues']['input_queue_size'])
     det_output_queue = multiprocessing.Queue(maxsize=config['queues']['output_queue_size'])
     video_path = os.getenv("VIDEO_PATH")
-    processes = []
-    process1 = Process(target=create_video_stream, args=(input_queue, video_path, ))
-    processes.append(process1)
-    process1.start()
-    process2 = Process(target=detection, args=(input_queue, det_output_queue, ))
-    processes.append(process2)
-    process2.start()
-    process3 = Process(target=recognition, args=(det_output_queue, ))
-    processes.append(process3)
-    process3.start()
-    process4 = Process(target=serve, args=())
-    processes.append(process4)
-    process4.start()
-    for p in processes:
+    if os.getenv("SHOOTING_MODE") == '1':
+        path_to_model = 'data/yolo_transport_close.pt'
+    else:
+        path_to_model = 'data/yolo_transport_far.pt'
+
+    region_of_counting = os.getenv("REGION_OF_COUNTING")
+    region_of_plates_detection = os.getenv("REGION_OF_PLATES_DETECTION")
+    region_of_transport_detection = os.getenv("REGION_OF_TRANSPORT_DETECTION")
+
+
+
+    capture_stream_process = Process(target=capture_stream, args=(input_queue, video_path, path_to_model, region_of_counting, region_of_plates_detection, region_of_transport_detection ))
+    capture_stream_process.daemon = False
+    capture_stream_process.start()
+
+    detection_process = Process(target=detection, args=(input_queue, det_output_queue, ))
+    detection_process.daemon = False
+    detection_process.start()
+
+    recognition_process = Process(target=recognition, args=(det_output_queue, ))
+    recognition_process.daemon = False
+    recognition_process.start()
+
+    server_process = Process(target=serve, args=())
+    server_process.daemon = False
+    server_process.start()
+
+    while True:
         try:
-            p.join()
-        except Exception as e:
-            print(f"Error in process: {e}")
+            if not capture_stream_process.is_alive():
+              capture_stream_process = Process(target=capture_stream, args=(input_queue, video_path, path_to_model, region_of_counting, region_of_plates_detection, region_of_transport_detection))
+              capture_stream_process.daemon = False
+              capture_stream_process.start()
+            if not detection_process.is_alive():
+              detection_process = Process(target=detection, args=(input_queue, det_output_queue,))
+              detection_process.daemon = False
+              detection_process.start()
+            if not recognition_process.is_alive():
+              recognition_process = Process(target=recognition, args=(det_output_queue,))
+              recognition_process.daemon = False
+              recognition_process.start()
+            if not server_process.is_alive():
+                server_process = Process(target=serve, args=())
+                server_process.daemon = False
+                server_process.start()
+        except KeyboardInterrupt:
+            print("Программа была прервана пользователем")
+            exit()
+
+
+
+
+
+

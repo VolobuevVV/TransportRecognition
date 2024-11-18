@@ -84,30 +84,26 @@ class PlateRecognizer():
             netout = self.interpreter.get_tensor(self.output_details[0]["index"])
             plate = helper.decode_batch(netout, self.letters)
             for pl in plate:
-                in_plate_res = cv2.resize(in_plate, (self.in_image_w, self.in_image_h))
                 if pl in self.decision_dict:
                     self.decision_dict[pl] = [
                         self.decision_dict[pl][0] + 1,
-                        in_plate_res,
-                        self.decision_dict[pl][2]
+                        self.decision_dict[pl][1]
                     ]
                 else:
-                    self.decision_dict[pl] = [1, in_plate_res, detection_time]
+                    self.decision_dict[pl] = [1, detection_time]
 
                 if len(self.decision_dict[pl]) > 0:
                     plate_found = True
 
         if len(self.decision_dict) > 0:
-            for plate, (count, crop_plate, detection_time) in self.decision_dict.items():
+            for plate, (count, detection_time) in self.decision_dict.items():
                 if count >= self.frames_decision:
-                    _, buffer = cv2.imencode('.png', crop_plate)
-                    crop_plate_blob = buffer.tobytes()
-                    client = self.get_client()
+                    client = get_client()
 
-                    client.execute('''
-                        INSERT INTO plates (plate, crop_plate, detection_time) VALUES
-                    ''', [(plate, crop_plate_blob, detection_time)])
 
+                    client.execute(''' INSERT INTO plates (plate, detection_time) VALUES ''',
+                                   [(plate, detection_time)]
+                                   )
 
                     client.disconnect()
 
@@ -122,6 +118,4 @@ class PlateRecognizer():
 
         if len(self.decision_dict) > 10:
             self.decision_dict = {}
-
-        return self.send_plates
 

@@ -1,18 +1,21 @@
 import itertools
-import logging
-import math
+from PIL import Image, ImageDraw
 import re
 import cv2
 import numpy as np
 
 
 def softmax(x):
-    e_x = np.exp(x)
-    return e_x / np.sum(e_x)
+    e_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+    return e_x / np.sum(e_x, axis=-1, keepdims=True)
 
 
 def sigmoid(x):
-    return 1.0 / (1.0 + np.exp(-x))
+    if x >= 0:
+        return 1.0 / (1.0 + np.exp(-x))
+    else:
+        exp_x = np.exp(x)
+        return exp_x / (1.0 + exp_x)
 
 
 
@@ -152,11 +155,6 @@ def prepare_plate(license_plate, angle_range=15):
     return license_plate
 
 
-def softmax(x):
-    """Compute softmax values for each sets of scores in x."""
-
-    # print np.sum(np.exp(x), axis=-1)
-    return np.exp(x) / np.expand_dims(np.sum(np.exp(x), axis=-1), -1)
 
 
 codes_2 = []
@@ -218,11 +216,10 @@ def decode_batch(out, letters, thresh_len=6):
         out_softmax = softmax(out[j])
         to_keep = np.where(np.max(out_softmax[2:], 1) > 0.7)
         out_best = list(np.argmax(out_softmax[2:][to_keep], 1))
-        #out_best = list(np.argmax(out_softmax[2:], 1))
         out_best = [k for k, g in itertools.groupby(out_best)]
         outstr = ""
         for c in out_best:
-            # print c
+
             if c < len(letters):
                 outstr += letters[c]
 
@@ -270,8 +267,179 @@ def bbox_crop_plate(bboxes, image, plate_max_rotate_angle=10):
 
     return plates
 
+def str_to_coordinates_roc(string, h, w):
+    result = [(0, 0), (w, 0), (w, h), (0, h)]
+    coordinates_str = string.replace('h', str(h))
+    coordinates_str = coordinates_str.replace('w', str(w))
+
+    coordinates_str = coordinates_str.strip("[]").replace(" ", "")
+
+    if not coordinates_str:
+        print("Ошибка: область подсчета ТС пустая / задана некорректно!")
+        return result
+
+    coordinate_pairs = coordinates_str.split("),(")
+
+    coordinates = []
+
+    for pair in coordinate_pairs:
+        pair = pair.strip("()")
+
+        if not pair:
+            print("Ошибка: область подсчета ТС пустая!")
+            return result
+
+        parts = pair.split(",")
+
+        if len(parts) != 2:
+            print("Ошибка: область подсчета ТС задана некорректно!")
+            return result
+
+        try:
+            x = int(eval(parts[0]))
+            y = int(eval(parts[1]))
+
+            if not (0 <= x <= w) or not (0 <= y <= h):
+                print(f"Ошибка: координаты ({x}, {y}) области подсчета ТС выходят за пределы допустимых значений.")
+                return result
+            coordinates.append((x, y))
+        except ZeroDivisionError:
+            print("Ошибка: деление на ноль при задании области подсчета ТС!")
+            return result
+
+        except (ValueError, SyntaxError) as e:
+            print("Ошибка: область подсчета ТС задана некорректно!")
+            return result
+
+    if len(coordinates) < 2:
+        print("Ошибка: область подсчета ТС не может быть точкой!")
+        return result
+
+    return coordinates
+
+def str_to_coordinates_ropd(string, h, w):
+    result = [(0, 0), (w, 0), (w, h), (0, h)]
+    coordinates_str = string.replace('h', str(h))
+    coordinates_str = coordinates_str.replace('w', str(w))
+
+    coordinates_str = coordinates_str.strip("[]").replace(" ", "")
+
+    if not coordinates_str:
+        print("Ошибка: область детекции номеров пустая / задана некорректно!")
+        return result
+
+    coordinate_pairs = coordinates_str.split("),(")
+
+    coordinates = []
+
+    for pair in coordinate_pairs:
+        pair = pair.strip("()")
+
+        if not pair:
+            print("Ошибка: область детекции номеров пустая!")
+            return result
+
+        parts = pair.split(",")
+
+        if len(parts) != 2:
+            print("Ошибка: область детекции номеров задана некорректно!")
+            return result
+
+        try:
+            x = int(eval(parts[0]))
+            y = int(eval(parts[1]))
+
+            if not (0 <= x <= w) or not (0 <= y <= h):
+                print(f"Ошибка: координаты ({x}, {y}) области детекции номеров выходят за пределы допустимых значений.")
+                return result
+            coordinates.append((x, y))
+        except ZeroDivisionError:
+            print("Ошибка: деление на ноль при задании области детекции номеров!")
+            return result
+
+        except (ValueError, SyntaxError) as e:
+            print("Ошибка: область детекции номеров задана некорректно!")
+            return result
+
+    if len(coordinates) < 3:
+        print("Ошибка: область детекции номеров не может быть точкой или линией!")
+        return result
+    return coordinates
 
 
 
+def str_to_coordinates_rotd(string, h, w):
+    result = [(0, 0), (w, 0), (w, h), (0, h)]
+    coordinates_str = string.replace('h', str(h))
+    coordinates_str = coordinates_str.replace('w', str(w))
 
+    coordinates_str = coordinates_str.strip("[]").replace(" ", "")
+
+    if not coordinates_str:
+        print("Ошибка: область детекции ТС пустая / задана некорректно!")
+        return result
+
+    coordinate_pairs = coordinates_str.split("),(")
+
+    coordinates = []
+
+    for pair in coordinate_pairs:
+        pair = pair.strip("()")
+
+        if not pair:
+            print("Ошибка: область детекции ТС пустая!")
+            return result
+
+        parts = pair.split(",")
+
+        if len(parts) != 2:
+            print("Ошибка: область детекции ТС задана некорректно!")
+            return result
+
+        try:
+            x = int(eval(parts[0]))
+            y = int(eval(parts[1]))
+
+            if not (0 <= x <= w) or not (0 <= y <= h):
+                print(f"Ошибка: координаты ({x}, {y}) области детекции ТС выходят за пределы допустимых значений.")
+                return result
+            coordinates.append((x, y))
+        except ZeroDivisionError:
+            print("Ошибка: деление на ноль при задании области детекции ТС!")
+            return result
+
+        except (ValueError, SyntaxError) as e:
+            print("Ошибка: область детекции ТС задана некорректно!")
+            return result
+
+    if len(coordinates) < 3:
+        print("Ошибка: область детекции ТС не может быть точкой или линией!")
+        return result
+    return coordinates
+
+
+def select_area_for_detection(frame, coordinates):
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+    image = Image.fromarray(frame_rgb)
+
+    if len(coordinates) == 4:
+        bbox = (coordinates[0][0], coordinates[0][1], coordinates[2][0], coordinates[2][1])
+        cropped_image = image.crop(bbox)
+        return np.array(cropped_image)
+
+    elif len(coordinates) > 4:
+        mask = Image.new('L', image.size, 0)
+        draw = ImageDraw.Draw(mask)
+
+        draw.polygon(coordinates, fill=255)
+
+        result_image = Image.new('RGB', image.size)
+        result_image.paste(image, mask=mask)
+
+        draw_result = ImageDraw.Draw(result_image)
+        draw_result.rectangle([0, 0, image.width, image.height], fill='black')
+        result_image.paste(image, mask=mask)
+
+        return np.array(result_image)
 

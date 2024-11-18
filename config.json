@@ -1,7 +1,7 @@
 {
 
     "video": {
-        "frame_skip": 1
+        "frame_skip_detection": 3
     },
 
     "queues": {
