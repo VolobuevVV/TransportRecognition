@@ -422,24 +422,17 @@ def select_area_for_detection(frame, coordinates):
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
     image = Image.fromarray(frame_rgb)
+    mask = Image.new('L', image.size, 0)
+    draw = ImageDraw.Draw(mask)
 
-    if len(coordinates) == 4:
-        bbox = (coordinates[0][0], coordinates[0][1], coordinates[2][0], coordinates[2][1])
-        cropped_image = image.crop(bbox)
-        return np.array(cropped_image)
+    draw.polygon(coordinates, fill=255)
 
-    elif len(coordinates) > 4:
-        mask = Image.new('L', image.size, 0)
-        draw = ImageDraw.Draw(mask)
+    result_image = Image.new('RGB', image.size)
+    result_image.paste(image, mask=mask)
 
-        draw.polygon(coordinates, fill=255)
+    draw_result = ImageDraw.Draw(result_image)
+    draw_result.rectangle([0, 0, image.width, image.height], fill='black')
+    result_image.paste(image, mask=mask)
 
-        result_image = Image.new('RGB', image.size)
-        result_image.paste(image, mask=mask)
-
-        draw_result = ImageDraw.Draw(result_image)
-        draw_result.rectangle([0, 0, image.width, image.height], fill='black')
-        result_image.paste(image, mask=mask)
-
-        return np.array(result_image)
+    return np.array(result_image)
 
