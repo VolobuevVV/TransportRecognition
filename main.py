@@ -67,16 +67,18 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
   frame_skip = 5
   extra_frame_skip = 0
   frame_counter = 0
-  start_time = start_time_second = extra_time = time.time()
+  start_time = time.time()
+  start_time_second = time.time()
+  extra_time = time.time()
 
 
   while True:
       ret, frame = cap.read()
       if not ret:
           break
-      if time.time() - extra_time > 0.5 and time.time() - extra_time < 3:
-          dop_time = time.time()
-          extra_frame_skip = math.ceil(cap.get(cv2.CAP_PROP_FPS) * (dop_time - start_time_second - (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000)))
+            if time.time() - extra_time > 0.5 and time.time() - extra_time < 3:
+          extra_time = time.time()
+          extra_frame_skip = math.ceil(cap.get(cv2.CAP_PROP_FPS) * (extra_time - start_time_second - (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000)))
 
       intermediate_time = time.time()
       elapsed_time = intermediate_time - start_time
@@ -85,42 +87,41 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
 
       if elapsed_time >= 5:
           current_fps = frame_counter / elapsed_time
-          print(f"FPS: {current_fps:.2f}  к/с")
           frame_skip = math.ceil(frame_skip * cap.get(cv2.CAP_PROP_FPS) / current_fps)
-          print(f"frame skip: {frame_skip:.2f}  шт")
           frame_counter = 0
           start_time = intermediate_time
 
-      if frame_counter % (max(1, int((frame_skip + extra_frame_skip) / 3))) != 0:
-          if not input_queue.full():
-              new_frame = helper.select_area_for_detection(frame, plates_detection_coordinates)
-              input_queue.put(new_frame)
+      if frame_skip + extra_frame_skip < cap.get(cv2.CAP_PROP_FPS):
+          if frame_counter % (max(1, int((frame_skip + extra_frame_skip) / 3))) == 0:
+              if not input_queue.full():
+                  new_frame = helper.select_area_for_detection(frame, plates_detection_coordinates)
+                  input_queue.put(new_frame)
 
       if frame_counter % (max(1, frame_skip + extra_frame_skip)) != 0:
           continue
 
-      new_frame = helper.select_area_for_detection(frame, transport_detection_coordinates)
-      counter.count(new_frame)
-      detection_time = int(time.time())
-      c = counter.classwise_counts
-      data = [
-          (
-              c.get('car', {}).get('IN', 0) + c.get('car', {}).get('OUT', 0),
-              c.get('bus', {}).get('IN', 0) + c.get('bus', {}).get('OUT', 0),
-              c.get('truck', {}).get('IN', 0) + c.get('truck', {}).get('OUT', 0),
-              c.get('motorcycle', {}).get('IN', 0) + c.get('motorcycle', {}).get('OUT', 0),
-              c.get('bicycle', {}).get('IN', 0) + c.get('bicycle', {}).get('OUT', 0),
-              detection_time
-          )
-      ]
+      if frame_skip + extra_frame_skip < 0.4 * cap.get(cv2.CAP_PROP_FPS):
+          new_frame = helper.select_area_for_detection(frame, transport_detection_coordinates)
+          counter.count(new_frame)
+          detection_time = int(time.time())
+          c = counter.classwise_counts
+          data = [
+              (
+                  c.get('car', {}).get('IN', 0) + c.get('car', {}).get('OUT', 0),
+                  c.get('bus', {}).get('IN', 0) + c.get('bus', {}).get('OUT', 0),
+                  c.get('truck', {}).get('IN', 0) + c.get('truck', {}).get('OUT', 0),
+                  c.get('motorcycle', {}).get('IN', 0) + c.get('motorcycle', {}).get('OUT', 0),
+                  c.get('bicycle', {}).get('IN', 0) + c.get('bicycle', {}).get('OUT', 0),
+                  detection_time
+              )
+          ]
+          
+          client.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''', data)
 
-
-      client.execute(
-          '''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''',
-          data
-      )
-
-
+      if frame_skip + extra_frame_skip > 4 * cap.get(cv2.CAP_PROP_FPS):
+          print("Система перегружена, закрытие видеопотока ...")
+          break
+    
   cap.release()
 
   client.disconnect()
