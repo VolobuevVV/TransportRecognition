@@ -28,10 +28,10 @@ BaseSolution.store_tracking_history = co.store_tracking_history2
 ObjectCounter.count = co.count2
 
 
-def get_client():
-    host = os.getenv("HOST")
-    port = os.getenv("PORT")
-    return Client(host=host, port=port, user='default', password='password', database='default')
+#def get_client():
+    #host = os.getenv("HOST")
+    #port = os.getenv("PORT")
+    #return Client(host=host, port=port, user='default', password='password', database='default')
 
 
 def detection(input_queue: multiprocessing.Queue, output_queue: multiprocessing.Queue):
@@ -60,7 +60,7 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
     if not cap.isOpened():
         raise IOError("Не удалось открыть видеофайл: {}".format(video_path))
     print("Началось чтение видеопотока")
-    client = get_client()
+    #client = get_client()
     counter = solutions.ObjectCounter(region=helper.str_to_coordinates_roc(region_of_counting, h, w),
                                       model=path_to_model)
     transport_detection_coordinates = helper.str_to_coordinates_rotd(region_of_transport_detection, h, w)
@@ -115,51 +115,51 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
                     detection_time
                 )
             ]
-            client.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''', data)
+            #client.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''', data)
 
         if frame_skip + extra_frame_skip > 4 * cap.get(cv2.CAP_PROP_FPS):
             print("Система перегружена, закрытие видеопотока ...")
             break
 
     cap.release()
-    client.disconnect()
+    #client.disconnect()
     print("Видеопоток закрыт")
 
 if __name__ == "__main__":
     with open('config.json') as config_file:
         config = json.load(config_file)
 
-    connected = False
-    attempts = 0
-    while not connected:
-        try:
-            client = get_client()
-            client.execute('''
-                CREATE TABLE IF NOT EXISTS plates (
-                    plate String,
-                    detection_time Int32,
-                ) ENGINE = MergeTree()
-                ORDER BY detection_time
-                ''')
+    #connected = False
+    #attempts = 0
+    #while not connected:
+        #try:
+            #client = get_client()
+            #client.execute('''
+                #CREATE TABLE IF NOT EXISTS plates (
+                    #plate String,
+                    #detection_time Int32,
+                #) ENGINE = MergeTree()
+                #ORDER BY detection_time
+                #''')
 
-            client.execute('''
-                CREATE TABLE IF NOT EXISTS transport (
-                    car Int32,
-                    bus Int32,
-                    truck Int32,
-                    motorcycle Int32,
-                    bicycle Int32,
-                    detection_time Int32
-                ) ENGINE = MergeTree()
-                ORDER BY detection_time
-                ''')
-            print("Подключение к ClickHouse прошло успешно!")
-            connected = True
-            client.disconnect()
-        except Exception as e:
-            attempts += 1
-            print(f"Попытка {attempts}: Подключение к ClickHouse не удалось. Ошибка: {e}")
-            time.sleep(10)
+            #client.execute('''
+                #CREATE TABLE IF NOT EXISTS transport (
+                    #car Int32,
+                    #bus Int32,
+                    #truck Int32,
+                    #motorcycle Int32,
+                    #bicycle Int32,
+                    #detection_time Int32
+                #) ENGINE = MergeTree()
+                #ORDER BY detection_time
+                #''')
+            #print("Подключение к ClickHouse прошло успешно!")
+            #connected = True
+            #client.disconnect()
+        #except Exception as e:
+            #attempts += 1
+            #print(f"Попытка {attempts}: Подключение к ClickHouse не удалось. Ошибка: {e}")
+            #time.sleep(10)
 
 
     input_queue = multiprocessing.Queue(maxsize=config['queues']['input_queue_size'])
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     if os.getenv("SHOOTING_MODE") == '1':
         path_to_model = 'data/yolo_transport_close.pt'
     else:
-        path_to_model = 'data/yolo_transport_far.pt'
+        path_to_model = 'data/yolo_transport_far_ncnn_model'
 
     region_of_counting = os.getenv("REGION_OF_COUNTING")
     region_of_plates_detection = os.getenv("REGION_OF_PLATES_DETECTION")
