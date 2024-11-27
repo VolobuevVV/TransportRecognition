@@ -1,13 +1,6 @@
 {
-
-    "video": {
-        "frame_skip_detection": 3
-    },
-
     "queues": {
         "input_queue_size": 30,
         "output_queue_size": 30
     }
-
-
 }

@@ -11,7 +11,7 @@ import vehicle_data_pb2_grpc
 def get_client():
     host = os.getenv("HOST")
     port = os.getenv("PORT")
-    return Client(host=host, port=port, user='default', password='password', database='default')
+    return Client(host=host, port=port, user='default', password='', database='default')
 
 
 class ServiceTransport(vehicle_data_pb2_grpc.ServiceTransportServicer):

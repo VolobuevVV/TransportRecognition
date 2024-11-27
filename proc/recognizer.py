@@ -1,12 +1,8 @@
-import json
 import os
-import sqlite3
 import time
-
 import cv2
 import numpy as np
 import utils.helper as helper
-from datetime import datetime
 from clickhouse_driver import Client
 
 
@@ -70,7 +66,7 @@ class PlateRecognizer():
     def get_client(self):
         host = os.getenv("HOST")
         port = os.getenv("PORT")
-        return Client(host=host, port=port, user='default', password='password', database='default')
+        return Client(host=host, port=port, user='default', password='', database='default')
 
     def run(self, plates):
         detection_time = int(time.time())
@@ -98,7 +94,7 @@ class PlateRecognizer():
         if len(self.decision_dict) > 0:
             for plate, (count, detection_time) in self.decision_dict.items():
                 if count >= self.frames_decision:
-                    client = get_client()
+                    client = self.get_client()
 
 
                     client.execute(''' INSERT INTO plates (plate, detection_time) VALUES ''',

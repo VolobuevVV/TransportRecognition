@@ -9,3 +9,4 @@ ultralytics==8.3.6
 zipp==3.19.2
 shapely==2.0.6
 lapx==0.5.11
+ncnn==1.0.20240820

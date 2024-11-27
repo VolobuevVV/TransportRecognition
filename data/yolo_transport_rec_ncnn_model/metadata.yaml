@@ -1,0 +1,18 @@
+description: Ultralytics YOLO11n model trained on /kaggle/working/TransportDetection-10/data.yaml
+author: Ultralytics
+date: '2024-11-26T05:25:36.637680'
+version: 8.3.37
+license: AGPL-3.0 License (https://ultralytics.com/license)
+docs: https://docs.ultralytics.com
+stride: 32
+task: detect
+batch: 1
+imgsz:
+- 320
+- 320
+names:
+  0: bicycle
+  1: bus
+  2: car
+  3: motorcycle
+  4: truck
