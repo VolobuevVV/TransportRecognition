@@ -2,8 +2,13 @@ services:
 
   plate_recognition:
     image: transport_recognition
+    devices:
+      # ls /dev/video* для получения списка камер подключенных по USB
+      - /dev/video1:/dev/video1
     container_name: transport_recognition
+    privileged: true
     environment:
+      #/dev/video1 для USB камеры
       - VIDEO_PATH=rtsp://admin:vvv222@192.168.1.3:554/stream2
       #Может быть только фигурой, координаты задаются относительно велечин w (ширина кадра) и h (высота кадра)
       - REGION_OF_TRANSPORT_DETECTION=whole_image
