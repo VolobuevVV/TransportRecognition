@@ -56,70 +56,62 @@ def recognition(output_queue: multiprocessing.Queue):
 
 def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_model: str, region_of_counting: str, region_of_plates_detection: str, region_of_transport_detection: str):
     cap = cv2.VideoCapture(video_path)
-    w, h = (int(cap.get(x)) for x in (cv2.CAP_PROP_FRAME_WIDTH, cv2.CAP_PROP_FRAME_HEIGHT))
+    w = h = 320
     if not cap.isOpened():
         raise IOError("Не удалось открыть видеофайл: {}".format(video_path))
     print("Началось чтение видеопотока")
+
     client = get_client()
-    counter = solutions.ObjectCounter(region=helper.str_to_coordinates_roc(region_of_counting, h, w),
-                                      model=path_to_model)
+    counter = solutions.ObjectCounter(region=helper.str_to_coordinates_roc(region_of_counting, h, w), model=path_to_model)
     transport_detection_coordinates = helper.str_to_coordinates_rotd(region_of_transport_detection, h, w)
     plates_detection_coordinates = helper.str_to_coordinates_ropd(region_of_plates_detection, h, w)
-    frame_skip = cap.get(cv2.CAP_PROP_FPS)
-    extra_frame_skip = 0
+    frame_skip = 3
     frame_counter = 0
     start_time = time.time()
-    start_time_second = time.time()
-    extra_time = time.time()
+
+
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
-        if time.time() - extra_time > 0.25:
-            extra_time = time.time()
-            extra_frame_skip = math.ceil(cap.get(cv2.CAP_PROP_FPS) * (extra_time - start_time_second - (cap.get(cv2.CAP_PROP_POS_MSEC) / 1000)))
-
+            
+        frame = cv2.resize(frame, (320, 320))
         intermediate_time = time.time()
         elapsed_time = intermediate_time - start_time
 
         frame_counter += 1
 
-        if elapsed_time >= 30:
+        if elapsed_time >= 10:
             current_fps = frame_counter / elapsed_time
-            frame_skip = math.ceil(frame_skip * cap.get(cv2.CAP_PROP_FPS) / current_fps)
+            frame_skip = math.ceil(min(3, frame_skip) * cap.get(cv2.CAP_PROP_FPS) / current_fps)
             frame_counter = 0
             start_time = intermediate_time
 
-        if frame_skip + extra_frame_skip < cap.get(cv2.CAP_PROP_FPS):
-            if frame_counter % (max(1, int((frame_skip + extra_frame_skip) / 3))) == 0:
-                if not input_queue.full():
-                    new_frame = helper.select_area_for_detection(frame, plates_detection_coordinates)
-                    input_queue.put(new_frame)
 
-        if frame_counter % (max(1, frame_skip + extra_frame_skip)) != 0:
+        if frame_counter % (min(3, frame_skip)) != 0:
             continue
 
-        if frame_skip + extra_frame_skip < 2 * cap.get(cv2.CAP_PROP_FPS):
-            new_frame = helper.select_area_for_detection(frame, transport_detection_coordinates)
-            counter.count(new_frame)
-            detection_time = int(time.time())
-            c = counter.classwise_counts
-            data = [
-                (
-                    c.get('car', {}).get('IN', 0) + c.get('car', {}).get('OUT', 0),
-                    c.get('bus', {}).get('IN', 0) + c.get('bus', {}).get('OUT', 0),
-                    c.get('truck', {}).get('IN', 0) + c.get('truck', {}).get('OUT', 0),
-                    c.get('motorcycle', {}).get('IN', 0) + c.get('motorcycle', {}).get('OUT', 0),
-                    c.get('bicycle', {}).get('IN', 0) + c.get('bicycle', {}).get('OUT', 0),
-                    detection_time
-                )
-            ]
-            client.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''', data)
+        if not input_queue.full():
+            new_frame = helper.select_area_for_detection(frame, plates_detection_coordinates)
+            input_queue.put(new_frame)
 
-        if frame_skip + extra_frame_skip > 10 * cap.get(cv2.CAP_PROP_FPS):
-            print("Система перегружена, закрытие видеопотока ...")
-            break
+        new_frame = helper.select_area_for_detection(frame, transport_detection_coordinates)
+        counter.count(new_frame)
+        detection_time = int(time.time())
+        c = counter.classwise_counts
+        data = [
+            (
+                c.get('car', {}).get('IN', 0) + c.get('car', {}).get('OUT', 0),
+                c.get('bus', {}).get('IN', 0) + c.get('bus', {}).get('OUT', 0),
+                c.get('truck', {}).get('IN', 0) + c.get('truck', {}).get('OUT', 0),
+                c.get('motorcycle', {}).get('IN', 0) + c.get('motorcycle', {}).get('OUT', 0),
+                c.get('bicycle', {}).get('IN', 0) + c.get('bicycle', {}).get('OUT', 0),
+                detection_time
+            )
+        ]
+        client.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''', data)
+
 
     cap.release()
     client.disconnect()
