@@ -2,8 +2,8 @@ import os
 import time
 import cv2
 import numpy as np
+import psycopg2
 import utils.helper as helper
-from clickhouse_driver import Client
 
 
 class PlateRecognizer():
@@ -63,10 +63,19 @@ class PlateRecognizer():
         image /= 255.0
         return np.expand_dims(image.T, -1)
 
-    def get_client(self):
+    def get_connection(self):
+        dbname = os.getenv("DBNAME")
+        user = os.getenv("USER")
+        password = os.getenv("PASSWORD")
         host = os.getenv("HOST")
         port = os.getenv("PORT")
-        return Client(host=host, port=port, user='default', password='', database='default')
+        return psycopg2.connect(
+            database=dbname,
+            user=user,
+            password=password,
+            host=host,
+            port=port
+        )
 
     def run(self, plates):
         detection_time = int(time.time())
@@ -94,14 +103,17 @@ class PlateRecognizer():
         if len(self.decision_dict) > 0:
             for plate, (count, detection_time) in self.decision_dict.items():
                 if count >= self.frames_decision:
-                    client = self.get_client()
+                    conn = self.get_connection()
+                    cursor = conn.cursor()
 
 
-                    client.execute(''' INSERT INTO plates (plate, detection_time) VALUES ''',
+                    cursor.execute(''' INSERT INTO plates (plate, detection_time) VALUES (%s, %s)''',
                                    [(plate, detection_time)]
                                    )
 
-                    client.disconnect()
+                    conn.commit()
+                    cursor.close()
+                    conn.close()
 
             self.frames_number = 0
             if not plate_found:

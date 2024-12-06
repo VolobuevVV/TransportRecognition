@@ -16,10 +16,12 @@ services:
       - REGION_OF_COUNTING=[(w * 0, h // 2), (w * 1, h // 2), (w * 0.5, h * 0.67), (0,  h * 0.8)]
       #Может быть только фигурой, координаты задаются относительно велечин w (ширина кадра) и h (высота кадра)
       - REGION_OF_PLATES_DETECTION=whole_image
-
-      #Хост и порт для подключения к базе данных
-      - HOST=clickhouse-server
-      - PORT=9000
+      #Подключение к базе данных
+      - DBNAME=database
+      - USER=user
+      - PASSWORD=password
+      - HOST=timescale-db
+      - PORT=5432
       #Хост и порт для GRPC
       - GRPC_HOST=0.0.0.0
       - GRPC_PORT=1539
@@ -36,14 +38,17 @@ services:
 
 
 
-  clickhouse-server:
-    image: clickhouse/clickhouse-server:24.8-alpine
-    container_name: clickhouse-server
+  timescale-db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescale-db
     ports:
-      - "7500:8123"
-      - "8500:9000"
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: database
     volumes:
-      - clickhouse_data:/var/lib/clickhouse
+      - timescale_data:/var/lib/postgresql/data
     deploy:
       resources:
         limits:
@@ -51,4 +56,5 @@ services:
           memory: 512M
 
 volumes:
-  clickhouse_data:
+  timescale_data:
+

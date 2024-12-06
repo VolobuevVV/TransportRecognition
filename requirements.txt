@@ -1,4 +1,4 @@
-clickhouse-driver==0.2.9
+psycopg2==2.9.10
 docker==7.1.0
 matplotlib==3.9.1
 numpy==1.26.4

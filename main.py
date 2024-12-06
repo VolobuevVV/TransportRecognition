@@ -2,13 +2,13 @@ import json
 import math
 import multiprocessing
 import time
+import psycopg2
 from proc.detector_runner import DetectorRunner
 import cv2
 from proc.recognizer_runner import RecognizerRunner
 from multiprocessing import Process
 from server import serve
 import os
-from clickhouse_driver import Client
 from ultralytics.solutions import ObjectCounter
 from ultralytics.solutions.solutions import BaseSolution
 from ultralytics import solutions
@@ -28,10 +28,19 @@ BaseSolution.store_tracking_history = co.store_tracking_history2
 ObjectCounter.count = co.count2
 
 
-def get_client():
+def get_connection():
+    dbname = os.getenv("DBNAME")
+    user = os.getenv("USER")
+    password = os.getenv("PASSWORD")
     host = os.getenv("HOST")
     port = os.getenv("PORT")
-    return Client(host=host, port=port, user='default', password='', database='default')
+    return psycopg2.connect(
+        database=dbname,
+        user=user,
+        password=password,
+        host=host,
+        port=port
+    )
 
 
 def detection(input_queue: multiprocessing.Queue, output_queue: multiprocessing.Queue):
@@ -58,10 +67,11 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
     cap = cv2.VideoCapture(video_path)
     w = h = 320
     if not cap.isOpened():
-        raise IOError("Не удалось открыть видеофайл: {}".format(video_path))
+        raise IOError("Не удалось открыть видеопоток: {}".format(video_path))
     print("Началось чтение видеопотока")
 
-    client = get_client()
+    conn = get_connection()
+    cursor = conn.cursor()
     counter = solutions.ObjectCounter(region=helper.str_to_coordinates_roc(region_of_counting, h, w), model=path_to_model)
     transport_detection_coordinates = helper.str_to_coordinates_rotd(region_of_transport_detection, h, w)
     plates_detection_coordinates = helper.str_to_coordinates_ropd(region_of_plates_detection, h, w)
@@ -110,11 +120,13 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
                 detection_time
             )
         ]
-        client.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES''', data)
+        cursor.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES (%s, %s, %s, %s, %s, %s)''', data)
+        conn.commit()
 
 
     cap.release()
-    client.disconnect()
+    cursor.close()
+    conn.close()
     print("Видеопоток закрыт")
 
 if __name__ == "__main__":
@@ -125,32 +137,30 @@ if __name__ == "__main__":
     attempts = 0
     while not connected:
         try:
-            client = get_client()
-            client.execute('''
-                CREATE TABLE IF NOT EXISTS plates (
-                    plate String,
-                    detection_time Int32,
-                ) ENGINE = MergeTree()
-                ORDER BY detection_time
-                ''')
-
-            client.execute('''
-                CREATE TABLE IF NOT EXISTS transport (
-                    car Int32,
-                    bus Int32,
-                    truck Int32,
-                    motorcycle Int32,
-                    bicycle Int32,
-                    detection_time Int32
-                ) ENGINE = MergeTree()
-                ORDER BY detection_time
-                ''')
-            print("Подключение к ClickHouse прошло успешно!")
-            connected = True
-            client.disconnect()
+            with get_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute('''
+                                    CREATE TABLE IF NOT EXISTS plates (
+                                        plate VARCHAR,
+                                        detection_time INT
+                                    );
+                                    ''')
+                    cursor.execute('''
+                                    CREATE TABLE IF NOT EXISTS transport (
+                                        car INT,
+                                        bus INT,
+                                        truck INT,
+                                        motorcycle INT,
+                                        bicycle INT,
+                                        detection_time INT
+                                    ); 
+                                    ''')
+                    conn.commit()
+                    print("Подключение к TimescaleDB прошло успешно!")
+                    connected = True
         except Exception as e:
             attempts += 1
-            print(f"Попытка {attempts}: Подключение к ClickHouse не удалось. Ошибка: {e}")
+            print(f"Попытка {attempts}: Подключение к TimescaleDB не удалось. Ошибка: {e}")
             time.sleep(10)
 
 
