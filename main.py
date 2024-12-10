@@ -110,16 +110,14 @@ def capture_stream(input_queue: multiprocessing.Queue, video_path: str, path_to_
         counter.count(new_frame)
         detection_time = int(time.time())
         c = counter.classwise_counts
-        data = [
-            (
+        data = (
                 c.get('car', {}).get('IN', 0) + c.get('car', {}).get('OUT', 0),
                 c.get('bus', {}).get('IN', 0) + c.get('bus', {}).get('OUT', 0),
                 c.get('truck', {}).get('IN', 0) + c.get('truck', {}).get('OUT', 0),
                 c.get('motorcycle', {}).get('IN', 0) + c.get('motorcycle', {}).get('OUT', 0),
                 c.get('bicycle', {}).get('IN', 0) + c.get('bicycle', {}).get('OUT', 0),
                 detection_time
-            )
-        ]
+             )
         cursor.execute('''INSERT INTO transport (car, bus, truck, motorcycle, bicycle, detection_time) VALUES (%s, %s, %s, %s, %s, %s)''', data)
         conn.commit()
 
